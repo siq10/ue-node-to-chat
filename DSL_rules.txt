@@ -1,0 +1,52 @@
+BlueprintDSL Format Reference
+A compact text representation of Unreal Engine 5 Blueprint nodes for LLM editing. Paste this back into the graph using the plugin's paste shortcut.
+Header:
+BP:<BlueprintName> Graph:<GraphName>
+---
+Node block:
+[<Id>] <NodeTitle> (<NodeClass>)
+  <type-specific line>
+  comment: <text>
+  pin <PinName> [<dir>:<category>]
+  pin <PinName> [<dir>:<category>] = <default>
+  pin <PinName> [<dir>:<category>] -> [<NodeId>].<PinName>
+  pin <PinName> [<dir>:<category>] = <default> -> [<NodeId>].<PinName>
+Type-specific lines:
+fn: <ParentClass>::<FunctionName>    (K2Node_CallFunction, K2Node_PromotableOperator)
+get: <VarName>                       (K2Node_VariableGet)
+set: <VarName>                       (K2Node_VariableSet)
+event: <EventName>                   (K2Node_Event, K2Node_CustomEvent)
+macro: <MacroName>                   (K2Node_MacroInstance)
+timeline: <TimelineName>             (K2Node_Timeline)
+Pin directions: in / out
+Links: -> [NodeId].<PinName> within selection only. External connections shown as -> [ext].<PinName> and are ignored on paste.
+Update vs Create:
+
+[0] — create new node on paste
+[0!] — update existing node in graph, matched by title + class
+
+Layout on paste: automatic left-to-right topological layout based on data flow. No position data needed.
+Example:
+BP:BP_CircleSpline Graph:ClampCursor
+---
+[0] vector + vector (K2Node_PromotableOperator)
+  fn: KismetMathLibrary::Add_VectorVector
+  pin A [in:real] -> [2].Radius
+  pin B [in:real] -> [1].Range
+
+[1] Get Range (K2Node_VariableGet)
+  get: Range
+  pin Range [out:real] -> [0].B
+
+[2] Get Radius (K2Node_VariableGet)
+  get: Radius
+  pin Radius [out:real] -> [0].A
+Rules for edits:
+
+Only output pins carry -> links — do not add links to input pins
+Omit pins that have no default value and no connections
+Wrong or missing class = node silently skipped on paste
+[ext] links cannot be restored — safe to omit
+Node IDs only need to be unique within the block — they are not persistent across sessions
+When adding new nodes, wire them using the same -> link syntax and assign unused IDs
+Promotable operator types (e.g. float vs vector) resolve automatically after wiring — no need to specify type explicitly
