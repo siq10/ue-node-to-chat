@@ -9,7 +9,7 @@ A compact text representation of Unreal Engine 5 Blueprint nodes for LLM editing
 Shorten textual representation for blueprint nodes by >50%, thus increasing the context capabilities of the chat interaction.
 
 ## How to install:
-1) Add folder to plugins, start project, enable plugin `UEnode2chat` from `edit->plugins`.
+1) Add folder `UENode2Chat` to plugins, start project, enable plugin `UEnode2chat` from `edit->plugins`.
 
 
 ## How to use:
