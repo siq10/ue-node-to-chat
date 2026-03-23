@@ -127,27 +127,25 @@ void FUENode2ChatModule::BuildAndCopyDSL(
     FString Out;
     Out += FString::Printf(TEXT("BP:%s Graph:%s\n"), *BP, *GN);
     Out += TEXT("---\n");
-    int32 BoundsMinX = INT_MAX, BoundsMinY = INT_MAX;
 
     for (UEdGraphNode* Node : Nodes)
     {
-        BoundsMinX = FMath::Min(BoundsMinX, Node->NodePosX);
-        BoundsMinY = FMath::Min(BoundsMinY, Node->NodePosY);
         const int32 Id = IndexMap[Node];
 
         // Human-readable title instead of internal object name
-        const FString Title = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+        FString Title = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+        Title.ReplaceInline(TEXT("\n"), TEXT(" "));
+        Title.ReplaceInline(TEXT("\r"), TEXT(""));
+        Out += FString::Printf(TEXT("[%d] %s (%s)\n"), Id, *Title, *Node->GetClass()->GetName());
 
-        const FString Class = Node->GetClass()->GetName();
-
-        Out += FString::Printf(TEXT("[%d] %s (%s)\n"), Id, *Title, *Class);
 
         // Node-specific semantic info
         if (UK2Node_CallFunction* CF = Cast<UK2Node_CallFunction>(Node))
         {
             UClass* PC = CF->FunctionReference.GetMemberParentClass(nullptr);
+            FString ParentName = PC ? PC->GetName() : BP;
             Out += FString::Printf(TEXT("  fn: %s::%s\n"),
-                PC ? *PC->GetName() : TEXT("?"),
+                *ParentName,
                 *CF->FunctionReference.GetMemberName().ToString());
         }
         else if (UK2Node_VariableGet* VG = Cast<UK2Node_VariableGet>(Node))
@@ -277,6 +275,8 @@ void FUENode2ChatModule::PasteNodesFromDSL()
     UAssetEditorSubsystem* AssetEditorSS = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
     for (UObject* Asset : AssetEditorSS->GetAllEditedAssets())
     {
+        if (!Asset->IsA<UBlueprint>()) 
+            continue; // skip non-blueprints
         IAssetEditorInstance* Inst = AssetEditorSS->FindEditorForAsset(Asset, false);
         FBlueprintEditor* Candidate = static_cast<FBlueprintEditor*>(Inst);
         if (Candidate)
@@ -504,7 +504,7 @@ void FUENode2ChatModule::PasteNodesFromDSL()
                 int32 Dot;
                 if (Token.FindChar('.', Dot))
                 {
-                    FString IdPart = Token.Mid(1, Dot - 2); // strip [ and ]
+                    FString IdPart = Token.Mid(1, Dot - 1);
                     FString PinPart = Token.Mid(Dot + 1);
                     int32 LinkedId = FCString::Atoi(*IdPart);
                     Pin.Links.Add(TPair<int32, FString>(LinkedId, PinPart));
@@ -606,7 +606,8 @@ for (const FParsedNode& Parsed : ParsedNodes)
             UClass* ParentClass = nullptr;
             if (!Parsed.FunctionParent.IsEmpty())
                 ParentClass = UClass::TryFindTypeSlow<UClass>(*Parsed.FunctionParent);
-
+            if (!ParentClass)
+                ParentClass = Blueprint->GeneratedClass; // fallback for BP-defined functions
             UFunction* Function = ParentClass
                 ? ParentClass->FindFunctionByName(FName(*Parsed.FunctionName))
                 : nullptr;
@@ -633,6 +634,8 @@ for (const FParsedNode& Parsed : ParsedNodes)
             UClass* ParentClass = nullptr;
             if (!Parsed.FunctionParent.IsEmpty())
                 ParentClass = UClass::TryFindTypeSlow<UClass>(*Parsed.FunctionParent);
+            if (!ParentClass)
+                ParentClass = Blueprint->GeneratedClass; // fallback for BP-defined functions
 
             UFunction* Function = ParentClass
                 ? ParentClass->FindFunctionByName(FName(*Parsed.FunctionName))
