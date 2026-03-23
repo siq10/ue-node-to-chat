@@ -32,6 +32,7 @@
 #include "K2Node_VariableGet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "K2Node_PromotableOperator.h"
+#include "K2Node_IfThenElse.h"
 
 
 
@@ -163,7 +164,10 @@ void FUENode2ChatModule::BuildAndCopyDSL(
             Out += FString::Printf(TEXT("  macro: %s\n"), *MA->GetMacroGraph()->GetName());
         else if (UK2Node_Timeline* TL = Cast<UK2Node_Timeline>(Node))
             Out += FString::Printf(TEXT("  timeline: %s\n"), *TL->TimelineName.ToString());
-
+        else if (Cast<UK2Node_IfThenElse>(Node))
+        {
+            // no type-specific line needed, class name is enough for paste
+        }
         if (!Node->NodeComment.IsEmpty())
             Out += FString::Printf(TEXT("  comment: %s\n"), *Esc(Node->NodeComment));
 
@@ -355,6 +359,13 @@ void FUENode2ChatModule::PasteNodesFromDSL()
         if (Line.StartsWith(TEXT("BP:")))
             continue;
 
+        // comment: text
+        if (Line.StartsWith(TEXT("comment: ")))
+        {
+            CurrentNode->Comment = Line.Mid(9);
+            continue;
+        }
+
         // Node header: [0] Title (ClassName)
         if (Line.StartsWith(TEXT("[")))
         {
@@ -379,7 +390,17 @@ void FUENode2ChatModule::PasteNodesFromDSL()
                 if (Rest.FindLastChar('(', OpenParen))
                 {
                     CurrentNode->Title = Rest.Left(OpenParen).TrimEnd();
-                    CurrentNode->Class = Rest.Mid(OpenParen + 1).LeftChop(1); // strip trailing )
+                    FString ClassAndRest = Rest.Mid(OpenParen + 1);
+
+                    int32 CloseParen;
+                    if (ClassAndRest.FindChar(')', CloseParen))
+                        CurrentNode->Class = ClassAndRest.Left(CloseParen);
+                    else
+                        CurrentNode->Class = ClassAndRest.LeftChop(1);
+
+                    //UE_LOG(LogTemp, Warning, TEXT("Node2Chat: Parsed node id=%d class='%s' title='%s'"),
+                        CurrentNode->Id, *CurrentNode->Class, *CurrentNode->Title);
+
                 }
                 else
                 {
@@ -433,13 +454,6 @@ void FUENode2ChatModule::PasteNodesFromDSL()
         if (Line.StartsWith(TEXT("timeline: ")))
         {
             CurrentNode->TimelineName = Line.Mid(10);
-            continue;
-        }
-
-        // comment: text
-        if (Line.StartsWith(TEXT("comment: ")))
-        {
-            CurrentNode->Comment = Line.Mid(9);
             continue;
         }
 
@@ -633,9 +647,27 @@ for (const FParsedNode& Parsed : ParsedNodes)
         {
             UClass* ParentClass = nullptr;
             if (!Parsed.FunctionParent.IsEmpty())
+            {
                 ParentClass = UClass::TryFindTypeSlow<UClass>(*Parsed.FunctionParent);
-            if (!ParentClass)
-                ParentClass = Blueprint->GeneratedClass; // fallback for BP-defined functions
+                if (!ParentClass)
+                {
+                    // Fallback: try loading KismetMathLibrary directly
+                    ParentClass = LoadObject<UClass>(nullptr,
+                        TEXT("/Script/Engine.KismetMathLibrary"));
+                }
+                if (!ParentClass)
+                {
+                    // Second fallback: search all loaded classes
+                    for (TObjectIterator<UClass> It; It; ++It)
+                    {
+                        if (It->GetName() == Parsed.FunctionParent)
+                        {
+                            ParentClass = *It;
+                            break;
+                        }
+                    }
+                }
+            }
 
             UFunction* Function = ParentClass
                 ? ParentClass->FindFunctionByName(FName(*Parsed.FunctionName))
@@ -649,6 +681,7 @@ for (const FParsedNode& Parsed : ParsedNodes)
                 OpNode->CreateNewGuid();
                 OpNode->PostPlacedNewNode();
                 OpNode->AllocateDefaultPins();
+                OpNode->Modify();
                 ResultNode = OpNode;
             }
             else
@@ -684,6 +717,63 @@ for (const FParsedNode& Parsed : ParsedNodes)
                 FVector2D(GridX, GridY), ActiveGraph, Parsed.EventName, nullptr, false);
             ResultNode = EventNode;
         }
+        else if (Parsed.Class == TEXT("K2Node_MacroInstance") && !Parsed.MacroName.IsEmpty())
+        {
+            // Search all graphs in the Blueprint for a matching macro
+            UEdGraph* MacroGraph = nullptr;
+
+            // Check standard library macros first
+            TArray<UBlueprint*> BlueprintLibraries;
+            UBlueprint* StandardLib = Cast<UBlueprint>(
+                StaticLoadObject(UBlueprint::StaticClass(), nullptr,
+                    TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros")));
+            if (StandardLib)
+                BlueprintLibraries.Add(StandardLib);
+
+            // Also check the current Blueprint's own macros
+            BlueprintLibraries.Add(Blueprint);
+
+            for (UBlueprint* Lib : BlueprintLibraries)
+            {
+                if (!Lib) continue;
+                for (UEdGraph* G : Lib->MacroGraphs)
+                {
+                    if (G && G->GetName() == Parsed.MacroName)
+                    {
+                        MacroGraph = G;
+                        break;
+                    }
+                }
+                if (MacroGraph) break;
+            }
+
+            if (MacroGraph)
+            {
+                UK2Node_MacroInstance* MacroNode = NewObject<UK2Node_MacroInstance>(ActiveGraph);
+                MacroNode->SetMacroGraph(MacroGraph);
+                ActiveGraph->AddNode(MacroNode, false, false);
+                MacroNode->CreateNewGuid();
+                MacroNode->PostPlacedNewNode();
+                MacroNode->AllocateDefaultPins();
+                MacroNode->Modify();
+                ResultNode = MacroNode;
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning,
+                    TEXT("Node2Chat: Macro graph '%s' not found, skipping."), *Parsed.MacroName);
+            }
+        }
+        else if (Parsed.Class == TEXT("K2Node_IfThenElse"))
+        {
+            UK2Node_IfThenElse* BranchNode = NewObject<UK2Node_IfThenElse>(ActiveGraph);
+            ActiveGraph->AddNode(BranchNode, false, false);
+            BranchNode->CreateNewGuid();
+            BranchNode->PostPlacedNewNode();
+            BranchNode->AllocateDefaultPins();
+            BranchNode->Modify();
+            ResultNode = BranchNode;
+        }
         else
         {
             UE_LOG(LogTemp, Warning,
@@ -692,7 +782,6 @@ for (const FParsedNode& Parsed : ParsedNodes)
         }
 
     }
-
     if (ResultNode)
     {
         if (!Parsed.Comment.IsEmpty())
@@ -722,7 +811,7 @@ while (bChanged)
             for (const TPair<int32, FString>& Link : Pin.Links)
             {
                 int32 TargetDepth = NodeDepth[P.Id] + 1;
-                if (NodeDepth[Link.Key] < TargetDepth)
+                if (NodeDepth.Contains(Link.Key) && NodeDepth[Link.Key] < TargetDepth)
                 {
                     NodeDepth[Link.Key] = TargetDepth;
                     bChanged = true;
